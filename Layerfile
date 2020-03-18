@@ -1,0 +1,37 @@
+FROM vm/ubuntu:18.04
+
+# install microk8s https://microk8s.io/docs/
+RUN snap install microk8s --classic && \
+    microk8s.status --wait-ready && \
+    microk8s.enable dns registry && \
+    microk8s.start dns registry
+
+# install docker & curl
+# if you use a different build, feel free to change this step
+RUN apt-get update && \
+    apt-get -y install docker.io curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# docker reads *every* file to build an image, so keep this
+# directory separate from the root directory to allow LayerCI
+# to cache the docker build step if those files haven't changed
+WORKDIR /app
+COPY . .
+
+# GIT_COMMIT comes from LayerCI
+# localhost:32000 is where the microk8s registry lives
+RUN docker build ./dockerbuild -t localhost:32000/my-image && \
+    ip link list && \
+    curl localhost:32000 && \
+    getent hosts localhost && \
+    curl 127.0.0.1:32000 && \
+    docker push localhost:32000/my-image
+
+RUN microk8s.kubectl apply -f kube-manifests
+RUN while [ "$(microk8s.kubectl get po example-pod -o jsonpath='{.status.phase}')" != "Running" ]; do \
+  echo "current pods:"; \
+  microk8s.kubectl get po; \
+  sleep 1; \
+done
+
+RUN ./test.sh
